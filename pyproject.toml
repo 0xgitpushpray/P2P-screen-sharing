@@ -1,13 +1,30 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "p2pshare"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Lightweight peer-to-peer screen sharing with Python, WebRTC and WebSockets"
 readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "0xgitpushpray" }]
+keywords = ["screen-sharing", "webrtc", "p2p", "aiortc", "websockets", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Conferencing",
+    "Topic :: Multimedia :: Video :: Capture",
+]
 dependencies = [
     "aiortc>=1.9",
     "websockets>=14",
@@ -17,7 +34,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio"]
+dev = ["pytest", "pytest-asyncio", "ruff"]
+
+[project.urls]
+Homepage = "https://github.com/0xgitpushpray/P2P-screen-sharing"
+Issues = "https://github.com/0xgitpushpray/P2P-screen-sharing/issues"
 
 [project.scripts]
 p2pshare = "p2pshare.cli:main"
@@ -25,6 +46,17 @@ p2pshare = "p2pshare.cli:main"
 [tool.setuptools]
 packages = ["p2pshare"]
 
+[tool.setuptools.dynamic]
+version = { attr = "p2pshare.__version__" }
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "ASYNC"]
