@@ -52,8 +52,14 @@ class Sharer:
             task.add_done_callback(self._tasks.discard)
         elif kind == "answer":
             pc = self._pcs.get(msg["from"])
-            if pc is not None and pc.signalingState == "have-local-offer":
+            if pc is None or pc.signalingState != "have-local-offer":
+                return
+            try:
                 await pc.setRemoteDescription(RTCSessionDescription(sdp=msg["sdp"], type="answer"))
+            except Exception:
+                # A broken or malicious viewer must not take the whole share down.
+                log.warning("Invalid answer from viewer %s", msg["from"], exc_info=True)
+                await self._drop(msg["from"])
         elif kind == "peer-left":
             await self._drop(msg["peer"])
 

@@ -12,6 +12,7 @@ import sys
 
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidURI
 
+from . import __version__
 from .client import SignalingError
 
 DEFAULT_SERVER = os.environ.get("P2PSHARE_SERVER", "ws://localhost:8765")
@@ -20,6 +21,17 @@ DEFAULT_SERVER = os.environ.get("P2PSHARE_SERVER", "ws://localhost:8765")
 def _random_room() -> str:
     alphabet = string.ascii_lowercase + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(10))
+
+
+def _positive(type_):
+    def parse(value: str):
+        number = type_(value)
+        if number <= 0:
+            raise argparse.ArgumentTypeError(f"must be greater than 0, got {value}")
+        return number
+
+    parse.__name__ = type_.__name__  # keeps argparse's "invalid int value" wording
+    return parse
 
 
 def _rtc_config(args: argparse.Namespace):
@@ -40,16 +52,23 @@ async def _serve(args: argparse.Namespace) -> None:
     )
 
 
-async def _share(args: argparse.Namespace) -> None:
+async def _share(args: argparse.Namespace) -> int:
     from .capture import ScreenTrack, list_monitors
     from .rtc import set_max_bitrate
     from .sharer import Sharer
 
+    monitors = list_monitors()
     if args.list_monitors:
-        for index, mon in enumerate(list_monitors()):
+        for index, mon in enumerate(monitors):
             label = "all monitors combined" if index == 0 else f"monitor {index}"
             print(f"{index}: {mon['width']}x{mon['height']} at ({mon['left']}, {mon['top']})  {label}")
-        return
+        return 0
+    if not 0 <= args.monitor < len(monitors):
+        print(
+            f"error: monitor {args.monitor} does not exist; run with --list-monitors to see them",
+            file=sys.stderr,
+        )
+        return 2
 
     if args.max_bitrate:
         set_max_bitrate(args.max_bitrate * 1000)
@@ -66,6 +85,7 @@ async def _share(args: argparse.Namespace) -> None:
         await Sharer(args.server, room, source, _rtc_config(args), args.password).run()
     finally:
         source.stop()
+    return 0
 
 
 async def _view(args: argparse.Namespace) -> None:
@@ -76,22 +96,29 @@ async def _view(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="p2pshare", description="Peer-to-peer screen sharing over WebRTC.")
+    parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-v", "--verbose", action="store_true", help="show debug logging")
     commands = parser.add_subparsers(dest="command", required=True)
 
     server = commands.add_parser("server", help="run the signaling server")
     server.add_argument("--host", default="0.0.0.0")
     server.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8765)))
-    server.add_argument("--max-viewers", type=int, default=16, help="viewers allowed per room")
+    server.add_argument("--max-viewers", type=_positive(int), default=16, help="viewers allowed per room")
     server.add_argument("--certfile", help="TLS certificate, to serve wss:// directly")
     server.add_argument("--keyfile", help="TLS private key for --certfile")
     server.set_defaults(func=_serve)
 
     peer = argparse.ArgumentParser(add_help=False)
-    peer.add_argument("--server", default=DEFAULT_SERVER, help=f"signaling server URL (default: {DEFAULT_SERVER})")
-    peer.add_argument("--password", help="room password")
+    peer.add_argument(
+        "--server", default=DEFAULT_SERVER, help=f"signaling server URL (default: {DEFAULT_SERVER})"
+    )
+    peer.add_argument(
+        "--password", default=os.environ.get("P2PSHARE_PASSWORD"), help="room password ($P2PSHARE_PASSWORD)"
+    )
     peer.add_argument("--stun", help="STUN server URL (default: Google's public STUN)")
-    peer.add_argument("--turn", default=os.environ.get("P2PSHARE_TURN"), help="TURN server URL, e.g. turn:host:3478")
+    peer.add_argument(
+        "--turn", default=os.environ.get("P2PSHARE_TURN"), help="TURN server URL, e.g. turn:host:3478"
+    )
     peer.add_argument("--turn-user", default=os.environ.get("P2PSHARE_TURN_USER"))
     peer.add_argument("--turn-password", default=os.environ.get("P2PSHARE_TURN_PASSWORD"))
 
@@ -99,9 +126,13 @@ def build_parser() -> argparse.ArgumentParser:
     share.add_argument("--room", help="room name (default: random)")
     share.add_argument("--monitor", type=int, default=1, help="monitor to share, 0 = all (default: 1)")
     share.add_argument("--list-monitors", action="store_true", help="list monitors and exit")
-    share.add_argument("--fps", type=float, default=15, help="frames per second (default: 15)")
-    share.add_argument("--max-width", type=int, default=1920, help="downscale wider screens (default: 1920)")
-    share.add_argument("--max-bitrate", type=int, help="encoder bitrate ceiling in kbps (aiortc default: 1500)")
+    share.add_argument("--fps", type=_positive(float), default=15, help="frames per second (default: 15)")
+    share.add_argument(
+        "--max-width", type=_positive(int), default=1920, help="downscale wider screens (default: 1920)"
+    )
+    share.add_argument(
+        "--max-bitrate", type=_positive(int), help="encoder bitrate ceiling in kbps (aiortc default: 1500)"
+    )
     share.set_defaults(func=_share)
 
     view = commands.add_parser("view", parents=[peer], help="watch a shared screen")
@@ -123,19 +154,13 @@ def main(argv: list[str] | None = None) -> int:
             logging.getLogger(name).setLevel(logging.WARNING)
 
     try:
-        asyncio.run(args.func(args))
+        return asyncio.run(args.func(args)) or 0
     except KeyboardInterrupt:
-        pass
+        return 0
     except SignalingError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 1
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
     except (OSError, InvalidHandshake, InvalidURI) as exc:
         print(f"error: cannot reach signaling server {args.server}: {exc}", file=sys.stderr)
-        return 1
     except ConnectionClosed:
         print("error: lost connection to the signaling server", file=sys.stderr)
-        return 1
-    return 0
+    return 1

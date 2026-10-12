@@ -19,6 +19,7 @@ Protocol (JSON text frames):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import json
 import logging
@@ -68,10 +69,8 @@ def _password_ok(given: str, expected: str) -> bool:
 
 
 async def _send(ws: ServerConnection, msg: dict) -> None:
-    try:
+    with contextlib.suppress(ConnectionClosed):
         await ws.send(json.dumps(msg))
-    except ConnectionClosed:
-        pass
 
 
 async def _reject(ws: ServerConnection, message: str) -> None:

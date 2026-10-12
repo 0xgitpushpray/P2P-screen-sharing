@@ -98,7 +98,8 @@ class Viewer:
                 self.window.close()
 
     async def _ui_loop(self) -> None:
-        while self.window.poll():
+        # OpenCV only delivers window events while being polled.
+        while self.window.poll():  # noqa: ASYNC110
             await asyncio.sleep(0.01)
 
     async def _signaling_loop(self, sig: SignalingClient) -> None:
