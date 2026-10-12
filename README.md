@@ -1,98 +1,166 @@
 # p2pshare
 
-Lightweight peer-to-peer screen sharing in Python. Share your screen with anyone
-over the internet from the command line; viewers watch it in a native window.
-No browser involved.
+[![CI](https://github.com/0xgitpushpray/P2P-screen-sharing/actions/workflows/ci.yml/badge.svg)](https://github.com/0xgitpushpray/P2P-screen-sharing/actions/workflows/ci.yml)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-- **WebRTC** ([aiortc](https://github.com/aiortc/aiortc)) carries the video directly between peers, encrypted (DTLS-SRTP) and bandwidth-adaptive.
-- **WebSockets** ([websockets](https://github.com/python-websockets/websockets)) power a tiny signaling server that only introduces peers to each other.
-- **mss** captures the screen and **OpenCV** displays it.
+Lightweight peer-to-peer screen sharing from the terminal. Share your screen with
+anyone over the internet using one command; viewers watch it in a native window.
+No browser, no account, and no video passes through a server.
 
+```console
+$ p2pshare share
+Sharing monitor 1 in room 'k3v9x0q2mz'. Viewers can join with:
+
+    p2pshare view k3v9x0q2mz --server wss://signal.example.com
 ```
-            1. join room / exchange SDP (tiny JSON messages)
-  sharer  <──────────── signaling server ────────────>  viewer(s)
-     │                                                     ▲
-     └──────────── 2. screen video, direct P2P ────────────┘
-                 (STUN for NAT traversal, TURN as fallback)
+
+## Features
+
+- **Direct and encrypted.** Video travels peer to peer over WebRTC (DTLS-SRTP). The server only introduces the two sides.
+- **Works across the internet.** STUN handles NAT traversal, with optional TURN for strict networks.
+- **One sharer, many viewers.** The screen is captured once and sent to every viewer.
+- **Adaptive.** The bitrate follows each viewer's bandwidth. Frame rate, resolution, and bitrate ceiling are all configurable.
+- **Small.** About 650 lines of Python built on [aiortc](https://github.com/aiortc/aiortc), [websockets](https://github.com/python-websockets/websockets), [mss](https://github.com/BoboTiG/python-mss), and [OpenCV](https://opencv.org/).
+- **Easy to self-host.** The signaling server needs only `websockets` and ships with a Dockerfile.
+
+## How it works
+
+```mermaid
+sequenceDiagram
+    participant S as Sharer
+    participant X as Signaling server
+    participant V as Viewer
+    S->>X: join room (sharer)
+    V->>X: join room (viewer)
+    X->>S: peer-joined
+    S->>X: SDP offer
+    X->>V: SDP offer
+    V->>X: SDP answer
+    X->>S: SDP answer
+    S-->>V: encrypted screen video, direct P2P (STUN / TURN)
 ```
 
-One sharer per room, with any number of viewers (16 by default). The screen is
-captured once and fanned out to every viewer.
+The signaling messages are a few kilobytes of JSON over a WebSocket. After the
+handshake the server is no longer involved; it only reappears when someone joins
+or leaves.
 
-## Install
+## Installation
 
-Requires Python 3.10+.
+Requires Python 3.10 or newer on Windows, macOS, or Linux (X11).
 
 ```bash
-pip install -e .          # or: pip install -e ".[dev]" to run the tests
+pipx install git+https://github.com/0xgitpushpray/P2P-screen-sharing.git
+# or
+pip install git+https://github.com/0xgitpushpray/P2P-screen-sharing.git
 ```
 
-## Quick start
+## Usage
+
+### Try it on one machine
+
+Run each command in its own terminal:
 
 ```bash
-# 1. somewhere both sides can reach
-p2pshare server                                   # listens on ws://0.0.0.0:8765
-
-# 2. the person sharing
-p2pshare share --server ws://<server-host>:8765
-#   Sharing monitor 1 in room 'k3v9x0q2mz'. Viewers can join with:
-#       p2pshare view k3v9x0q2mz --server ws://<server-host>:8765
-
-# 3. each viewer
-p2pshare view k3v9x0q2mz --server ws://<server-host>:8765
+p2pshare server
+p2pshare share --room demo
+p2pshare view demo
 ```
 
-In the viewer window: **f** toggles fullscreen, **q** / **Esc** quits.
-Set `P2PSHARE_SERVER` to skip typing `--server` every time.
+### Share with someone over the internet
 
-## Sharing over the internet
+1. **Run the signaling server somewhere public** (see [Deploying the signaling server](#deploying-the-signaling-server)).
+2. **Share:**
 
-Only the signaling server needs a public address. It handles a few kilobytes
-per connection and no video, so the smallest VPS or free PaaS tier is enough.
+   ```bash
+   p2pshare share --server wss://signal.example.com --password hunter2
+   ```
 
-- **Docker:** `docker build -t p2pshare-signal . && docker run -p 8765:8765 p2pshare-signal`
-- **PaaS** (Render, Railway, Fly.io, ...): run `python -m p2pshare server`. It honours `$PORT` and answers `GET /healthz` for health checks.
-- **TLS:** use `wss://` in production so nobody can tamper with the handshake. Either put the server behind a TLS-terminating proxy (Caddy, nginx, or your PaaS), or pass `--certfile` / `--keyfile` directly.
+3. **Send the printed `p2pshare view ...` command to your viewers.** In the viewer window, press **f** for fullscreen and **q** or **Esc** to quit.
 
-Protect a room with `--password` on both sides. Room names are random by default, so they also act as a shared secret.
+Set `P2PSHARE_SERVER` (and `P2PSHARE_PASSWORD`) so you don't have to type `--server` and `--password` every time.
 
-### When peers cannot connect (NAT / firewalls)
+### Options
 
-A public STUN server (Google's by default) lets most home and office networks
-connect directly. Symmetric NATs, some mobile carriers, and strict corporate
-firewalls need a **TURN** relay, such as a self-hosted [coturn](https://github.com/coturn/coturn)
-or a hosted service:
+| Command | Option | Default | Description |
+|---|---|---|---|
+| `share` | `--room` | random | Room name. The random default works like a shared secret. |
+| | `--monitor` | `1` | Monitor index; `0` captures all monitors. |
+| | `--list-monitors` | | List monitors and exit. |
+| | `--fps` | `15` | Capture frame rate. |
+| | `--max-width` | `1920` | Downscale wider screens, keeping the aspect ratio. |
+| | `--max-bitrate` | `1500` | Encoder ceiling in kbps. Raise it (for example `4000`) for sharper text. |
+| `share`, `view` | `--server` | `$P2PSHARE_SERVER` or `ws://localhost:8765` | Signaling server URL. |
+| | `--password` | `$P2PSHARE_PASSWORD` | Room password. |
+| | `--stun` | Google public STUN | STUN server URL. |
+| | `--turn`, `--turn-user`, `--turn-password` | `$P2PSHARE_TURN*` | TURN relay, for example `turn:turn.example.com:3478`. |
+| `server` | `--host`, `--port` | `0.0.0.0`, `$PORT` or `8765` | Listen address. |
+| | `--max-viewers` | `16` | Viewers allowed per room. |
+| | `--certfile`, `--keyfile` | | Serve `wss://` directly. |
+
+Add `-v` before the command (`p2pshare -v share`) for debug logs.
+
+## Deploying the signaling server
+
+The server carries no video, so the smallest VPS or a free PaaS tier is enough.
+
+- **Docker:**
+
+  ```bash
+  docker build -t p2pshare-signal .
+  docker run -p 8765:8765 p2pshare-signal
+  ```
+
+- **PaaS** (Render, Railway, Fly.io, ...): run `python -m p2pshare server`. It reads `$PORT` and answers `GET /healthz`.
+- **TLS:** in production, use `wss://`. Either put the server behind a TLS-terminating proxy (Caddy, nginx, or your platform's) or pass `--certfile` and `--keyfile`.
+
+### Strict NATs and firewalls
+
+Most home and office networks connect directly using STUN. Symmetric NATs, some
+mobile carriers, and locked-down corporate networks need a TURN relay, such as
+a self-hosted [coturn](https://github.com/coturn/coturn) or a hosted TURN service:
 
 ```bash
 p2pshare share --turn turn:turn.example.com:3478 --turn-user alice --turn-password s3cret
 ```
 
-Either side can supply TURN, but both sides supplying it is the most reliable. The same
-values can come from `P2PSHARE_TURN`, `P2PSHARE_TURN_USER`, and `P2PSHARE_TURN_PASSWORD`.
-aiortc uses only one STUN server and one TURN server.
+The most reliable setup is for both sides to configure TURN. aiortc uses only one
+STUN server and one TURN server.
 
-## Options
+## Security and privacy
 
-| Command | Option | Default | |
-|---|---|---|---|
-| `share` | `--room` | random | room name |
-| | `--monitor` | `1` | monitor index, `0` = all monitors |
-| | `--list-monitors` | | list monitors and exit |
-| | `--fps` | `15` | capture frame rate |
-| | `--max-width` | `1920` | downscale wider screens (keeps aspect ratio) |
-| | `--max-bitrate` | `1500` | encoder bitrate ceiling in kbps; raise it (e.g. `4000`) for sharper text |
-| `share`, `view` | `--server`, `--password`, `--stun`, `--turn`, `--turn-user`, `--turn-password` | | |
-| `server` | `--host`, `--port`, `--max-viewers`, `--certfile`, `--keyfile` | `0.0.0.0`, `8765`, `16` | |
+- **Video** is encrypted end to end between peers with DTLS-SRTP and never touches the signaling server.
+- **The signaling server** sees room names, room passwords, and the peers' IP addresses, which are inside the SDP. Use `wss://` and a server you run or trust. Passwords are checked in constant time and never stored on disk.
+- **The STUN server** (Google's by default) learns your public IP address. Use `--stun` to choose another one.
+- **Anyone with the room name and password can watch.** There is no per-viewer approval yet, so use a password for anything sensitive. The sharer's log shows every viewer that connects.
 
-Add `-v` before the command (`p2pshare -v share ...`) for debug logs.
+## Troubleshooting
 
-## Platform notes
+| Symptom | Fix |
+|---|---|
+| Viewer shows "Connection failed" | One side is behind a strict NAT or firewall. Configure a TURN server. |
+| Takes a few seconds to connect | Normal. aiortc gathers all network candidates before connecting, and computers with virtual network adapters (Hyper-V, WSL, Docker, VPNs) take longer. |
+| Blurry text | Raise `--max-bitrate`, or lower `--fps` so each frame gets more bits. |
+| Black or empty capture on macOS | Give your terminal *Screen Recording* permission in System Settings → Privacy & Security, then restart it. |
+| Capture fails on Linux | mss needs an X11 session. Pure Wayland sessions are not supported. |
 
-- **macOS:** grant your terminal *Screen Recording* permission (System Settings → Privacy & Security).
-- **Linux:** capture needs an X11 session; pure Wayland sessions are not supported by mss.
-- The mouse cursor is not included in the capture, and audio is not shared.
+## Limitations
 
-## Project layout
+- The mouse cursor is not included in the capture, and there is no audio.
+- View only: there is no remote control.
+- If the sharer loses its connection to the signaling server, it exits instead of reconnecting.
+
+## Development
+
+```bash
+git clone https://github.com/0xgitpushpray/P2P-screen-sharing.git
+cd P2P-screen-sharing
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+
+pytest                          # includes a real WebRTC end-to-end test, fully offline
+ruff check . && ruff format .
+```
 
 ```
 p2pshare/
@@ -103,9 +171,10 @@ p2pshare/
   sharer.py     one peer connection per viewer, fed from a single capture
   viewer.py     receives the stream and renders it in an OpenCV window
   rtc.py        ICE servers and encoder tuning
-tests/          signaling protocol tests and a full WebRTC end-to-end test
 ```
 
-```bash
-pytest
-```
+Issues and pull requests are welcome. Please run the tests and `ruff` before opening a PR.
+
+## License
+
+[MIT](LICENSE)
